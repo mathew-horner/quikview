@@ -1,0 +1,9 @@
+[package]
+name = "quikview"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pixels = "0.15.0"
+quikpix = { git = "https://github.com/mathew-horner/quikpix" }
+winit = "0.29.0"
