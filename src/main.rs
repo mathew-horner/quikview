@@ -1,5 +1,7 @@
 use std::path::PathBuf;
+use std::sync::mpsc;
 
+use notify::{RecursiveMode, Watcher};
 use pixels::{Pixels as PixelBuffer, SurfaceTexture};
 use quikpix::Pixels;
 use winit::dpi::PhysicalSize;
@@ -31,7 +33,7 @@ fn main() {
     };
 
     let filename = filepath.file_name().unwrap().to_str().unwrap().to_owned();
-    let pixels = Pixels::read(filepath);
+    let mut pixels = Pixels::read(&filepath);
     let logical_width = pixels.width() as u32;
     let logical_height = pixels.height() as u32;
     let physical_width = logical_width * scale;
@@ -51,51 +53,57 @@ fn main() {
     let mut pixel_buffer = PixelBuffer::new(physical_width, physical_height, surface_texture)
         .expect("failed to create pixel buffer");
 
-    event_loop
-        .run(|event, elwt| {
-            match event {
-                Event::WindowEvent {
-                    event: WindowEvent::CloseRequested,
-                    ..
-                } => {
-                    elwt.exit();
-                }
-                Event::AboutToWait => {
-                    // Application update code.
+    let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
+    let mut watcher = notify::recommended_watcher(tx).expect("failed to set up fs watcher");
+    watcher
+        .watch(&filepath, RecursiveMode::NonRecursive)
+        .unwrap();
 
-                    // Queue a RedrawRequested event.
-                    //
-                    // You only need to call this if you've determined that you need to redraw in
-                    // applications which do not always need to. Applications that redraw continuously
-                    // can render here instead.
-                    // window.request_redraw();
+    event_loop
+        .run(|event, elwt| match event {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                elwt.exit();
+            }
+            Event::AboutToWait => {
+                if rx.try_recv().is_ok() {
+                    window.request_redraw();
                 }
-                Event::WindowEvent {
-                    event: WindowEvent::RedrawRequested,
-                    ..
-                } => {
-                    let frame = pixel_buffer.frame_mut();
-                    for y in 0..logical_height {
-                        for x in 0..logical_width {
-                            let color = pixels.get(x as usize, y as usize);
-                            for py in (y * scale)..(y * scale) + scale {
-                                for px in (x * scale)..(x * scale) + scale {
-                                    let idx = 4 * ((py * physical_width + px) as usize);
-                                    frame[idx] = color.0;
-                                    frame[idx + 1] = color.1;
-                                    frame[idx + 2] = color.2;
-                                    frame[idx + 3] = 0xFF;
-                                }
+            }
+            Event::WindowEvent {
+                event: WindowEvent::RedrawRequested,
+                ..
+            } => {
+                pixels = Pixels::read(&filepath);
+                if pixels.width() as u32 != logical_width
+                    || pixels.height() as u32 != logical_height
+                {
+                    panic!("dynamic resizes are not yet supported");
+                }
+
+                let frame = pixel_buffer.frame_mut();
+                for y in 0..logical_height {
+                    for x in 0..logical_width {
+                        let color = pixels.get(x as usize, y as usize);
+                        for py in (y * scale)..(y * scale) + scale {
+                            for px in (x * scale)..(x * scale) + scale {
+                                let idx = 4 * ((py * physical_width + px) as usize);
+                                frame[idx] = color.0;
+                                frame[idx + 1] = color.1;
+                                frame[idx + 2] = color.2;
+                                frame[idx + 3] = 0xFF;
                             }
                         }
                     }
-
-                    pixel_buffer
-                        .render()
-                        .expect("failed to render pixel buffer");
                 }
-                _ => (),
+
+                pixel_buffer
+                    .render()
+                    .expect("failed to render pixel buffer");
             }
+            _ => (),
         })
         .unwrap();
 }
